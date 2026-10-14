@@ -1,4 +1,5 @@
 use linux_embedded_hal::*;
+use embedded_hal::blocking::i2c::{Write, WriteRead};
 use i2cdev::linux::*;
 use i2cdev::linux::LinuxI2CError;
 
@@ -36,6 +37,8 @@ impl MPU {
 
     pub fn new(i2c_: I2cdev) -> MPU {
 
+        println!("new mpu declared");
+
         MPU {
             i2c: i2c_,
             address: MPU_ADDR
@@ -50,13 +53,13 @@ impl MPU {
         }
     }
 
-    pub fn init(self) -> Result<(), LinuxI2CError> {
+    pub fn init(&mut self) -> Result<(), LinuxI2CError> {
 
         let id = self.read_register(WHO_AM_I);
         
-        if id != 0x68 {
-            panic!("Unexpected MPU6050 device ID: {id:#04x}");
-        }
+        // if id != 0x68 {
+        //     panic!("Unexpected MPU6050 device ID");
+        // }
 
         // Wake sensor and select internal oscillator.
         self.write_register(PWR_MGMT_1, 0x00)?;
@@ -70,7 +73,7 @@ impl MPU {
         Ok(())
     }
 
-    pub fn read_registers(self, reg: u8, length: usize) -> Result<Vec<u8>, LinuxI2CError> {
+    pub fn read_registers(&mut self, reg: u8, length: usize) -> Result<Vec<u8>, LinuxI2CError> {
         let mut buffer = vec![0u8; length];
 
         self.i2c.write_read(
@@ -83,7 +86,7 @@ impl MPU {
     }
 
 
-    pub fn read_register(self, reg: u8) -> Result<u8, LinuxI2CError> {
+    pub fn read_register(&mut self, reg: u8) -> Result<u8, LinuxI2CError> {
         let mut buffer = [0u8; 1];
 
         self.i2c.write_read(
@@ -95,14 +98,14 @@ impl MPU {
         Ok(buffer[0])
     }
 
-    pub fn write_register(self, reg: u8, value: u8) -> Result<(), LinuxI2CError> {
+    pub fn write_register(&mut self, reg: u8, value: u8) -> Result<(), LinuxI2CError> {
         self.i2c.write(
             self.address,
             &[reg, value],
         )
     }
 
-    pub fn get_acc(self) -> Result<Vector, LinuxI2CError> {
+    pub fn get_acc(&mut self) -> Result<Vector, LinuxI2CError> {
 
         let acc_values = self.read_registers(ACCEL_XOUT_H, 6)?;
 
@@ -121,7 +124,7 @@ impl MPU {
     }
 
 
-    pub fn get_gyro(self) -> Result<Vector, LinuxI2CError> {
+    pub fn get_gyro(&mut self) -> Result<Vector, LinuxI2CError> {
         let gyro_values = self.read_registers(GYRO_XOUT_H, 6)?;
 
         let read_i16_as_f32 = |i: usize| {
@@ -138,7 +141,7 @@ impl MPU {
         Ok(gyro_values)
     }
 
-    pub fn read(self) -> Result<Measurements, LinuxI2CError> {
+    pub fn read(&mut self) -> Result<Measurements, LinuxI2CError> {
         let buf = self.read_registers(ACCEL_XOUT_H, 14)?;
 
         let read_i16_as_f32 = |i: usize| {
@@ -176,15 +179,17 @@ impl MPU {
   pub z: f32
 }
 
-pub impl Vector {
+impl Vector {
 
   pub fn new() -> Vector {
     Vector { x: 0.0, y: 0.0, z: 0.0 }
   }
 
   pub fn smooth(&mut self, new: & Vector) {
-    // 
-    self += ALPHA * new - self
+
+    self.x = self.x + ALPHA * (new.x - self.x);
+    self.y = self.y + ALPHA * (new.y - self.y);
+    self.z = self.z + ALPHA * (new.z - self.z)
 
   }
 

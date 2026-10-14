@@ -25,16 +25,15 @@ pub struct IMU {
 }
 
 
-const MPU_ADDR: u8 = 0x68;
+const MPU_ADDR: u8 = 0x69;
  
-fn main() -> Result<(), Mpu6050Error<LinuxI2CError>> {
-  let i2c = I2cdev::new("/dev/i2c-1")
-          .map_err(Mpu6050Error::I2c)?;
+fn main() -> Result<(), LinuxI2CError> {
+  let i2c = I2cdev::new("/dev/i2c-1")?;
 
-  let mut delay = Delay;
+  // let mut delay = Delay;
   let mut mpu = MPU::new_with_address(i2c, 0x69);
 
-  let mut processor = Processor {mpu};
+  let processor = Processor {};
 
   mpu.init()?;
 
@@ -43,7 +42,7 @@ fn main() -> Result<(), Mpu6050Error<LinuxI2CError>> {
   let mut gyro = Vector::new();
   let mut acc = Vector::new();
 
-  let bias = processor.calibrate_sensor_biases();
+  let bias = processor.calibrate_sensor_biases(&mut mpu)?;
 
 
   loop {
@@ -55,11 +54,11 @@ fn main() -> Result<(), Mpu6050Error<LinuxI2CError>> {
     // let mpu_acc = Vector {x: raw_acc.x, y: raw_acc.y, z: 0.0} - calibration.acc;
     // let mpu_gyro = Vector {x: raw_gyro.x, y: raw_gyro.y, z: raw_gyro.z} - calibration.gyro;
 
-    gyro.smooth(&raw_gyro - bias.gyro);
-    acc.smooth(&raw_acc - bias.acc);
+    gyro.smooth(&(raw_gyro - bias.gyro));
+    acc.smooth(&(raw_acc - bias.acc));
 
-    println!("\rgyro: {:?}", mpu_gyro);
-    println!("\racc: {:?}", mpu_acc * (180.0 / std::f32::consts::PI));
+    println!("\rgyro: {:?}", gyro);
+    println!("\racc: {:?}", acc * (180.0 / std::f32::consts::PI));
 
     std::thread::sleep(Duration::from_millis(100));
 
