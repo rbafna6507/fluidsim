@@ -25,25 +25,27 @@ pub struct IMU {
 }
 
 
-const MPU_ADDR: u8 = 0x69;
+const MPU_ADDR: u8 = 0x68;
  
 fn main() -> Result<(), LinuxI2CError> {
+  println!("running");
+
   let i2c = I2cdev::new("/dev/i2c-1")?;
 
   // let mut delay = Delay;
-  let mut mpu = MPU::new_with_address(i2c, 0x69);
+  let mut mpu = MPU::new(i2c);
 
   let processor = Processor {};
 
   mpu.init()?;
 
-  println!("\n");
 
   let mut gyro = Vector::new();
   let mut acc = Vector::new();
 
   let bias = processor.calibrate_sensor_biases(&mut mpu)?;
 
+  println!("\n");
 
   loop {
     print!("\x1B[2A");
@@ -58,7 +60,7 @@ fn main() -> Result<(), LinuxI2CError> {
     acc.smooth(&(raw_acc - bias.acc));
 
     println!("\rgyro: {:?}", gyro);
-    println!("\racc: {:?}", acc * (180.0 / std::f32::consts::PI));
+    println!("\racc: {:?}", acc);
 
     std::thread::sleep(Duration::from_millis(100));
 

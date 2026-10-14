@@ -55,20 +55,32 @@ impl MPU {
 
     pub fn init(&mut self) -> Result<(), LinuxI2CError> {
 
-        let id = self.read_register(WHO_AM_I);
+        println!("initializing...");
+
+        let id = self.read_register(WHO_AM_I)?;
+        println!("WHO_AM_I: {id:#04x}");
         
-        // if id != 0x68 {
-        //     panic!("Unexpected MPU6050 device ID");
-        // }
+        if id != 0x68 {
+            println!("id is not 0x68");
+            panic!("Unexpected MPU6050 device ID");
+        }
 
         // Wake sensor and select internal oscillator.
         self.write_register(PWR_MGMT_1, 0x00)?;
 
+        println!("sensor awake");
+
         // Accelerometer ±2g
         self.write_register(0x1C, 0x00)?;
 
+        println!("accelerometer written");
+
         // Gyroscope ±250 degrees/second
         self.write_register(0x1B, 0x00)?;
+
+        println!("gyro written");
+
+        println!("initializing complete");
 
         Ok(())
     }
