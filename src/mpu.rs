@@ -1,6 +1,5 @@
 use linux_embedded_hal::*;
 use embedded_hal::blocking::i2c::{Write, WriteRead};
-use i2cdev::linux::*;
 use i2cdev::linux::LinuxI2CError;
 
 use std::ops::Sub;
@@ -21,10 +20,11 @@ const GYRO_SCALE: f32 = 131.0;    // ±250 deg/s
 
 const ALPHA: f32 = 0.15;
 
-struct Measurements {
-    gyro: Vector,
-    acc: Vector
+pub struct Measurements {
+    pub gyro: Vector,
+    pub acc: Vector
 }
+
 
 
 pub struct MPU {

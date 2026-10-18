@@ -1,31 +1,32 @@
 mod mpu;
 mod processing;
+mod imu;
 
-use std::{any::Any, thread, time::Duration};
+use std::{time::{Duration, Instant}};
 
 use mpu::MPU;
-use processing::Processor;
+use processing::*;
+use imu::*;
 
-use linux_embedded_hal::{I2cdev, Delay};
+use linux_embedded_hal::{I2cdev};
 use i2cdev::linux::LinuxI2CError;
 
-use crate::{mpu::Vector, processing::Bias};
-
-pub struct Orientation {
-  pub pitch: f32,
-  pub roll: f32
-}
-
-pub struct IMU {
-  mpu: MPU,
-  biases: Bias,
-  gyro: Vector,
-  acc: Vector,
-  orientation: Orientation
-}
+use crate::{mpu::Vector};
 
 
 const MPU_ADDR: u8 = 0x68;
+const PRINT_PERIOD_MS: u128 = 100;
+const ORIENTATION_ALPHA: f32 = 0.15;
+
+
+
+struct State {
+  imu: IMU,
+
+  display_orientation: Orientation,
+  display_gyro: Vector,
+  display_acc: Vector
+}
  
 fn main() -> Result<(), LinuxI2CError> {
   println!("running");
@@ -34,35 +35,46 @@ fn main() -> Result<(), LinuxI2CError> {
 
   // let mut delay = Delay;
   let mut mpu = MPU::new(i2c);
+  let mut imu = IMU::new(mpu)?;
 
-  let processor = Processor {};
+  imu.update()?;
+  let display_orientation = imu.orientation.expect("IMU was updated");
+  let sample = imu.last_sample;
 
-  mpu.init()?;
-
-
-  let mut gyro = Vector::new();
-  let mut acc = Vector::new();
-
-  let bias = processor.calibrate_sensor_biases(&mut mpu)?;
-
+  let mut state = State {
+      imu,
+      display_orientation,
+      display_gyro: sample.gyro,
+      display_acc: sample.acc,
+  };
   println!("\n");
 
+  let mut last_time = Instant::now();
+
   loop {
-    print!("\x1B[2A");
+    let now = Instant::now();
 
-    let raw_gyro = mpu.get_gyro()?;
-    let raw_acc = mpu.get_acc()?;
+    let dt = now.duration_since(last_time).as_millis();
+    state.imu.update()?;
 
-    // let mpu_acc = Vector {x: raw_acc.x, y: raw_acc.y, z: 0.0} - calibration.acc;
-    // let mpu_gyro = Vector {x: raw_gyro.x, y: raw_gyro.y, z: raw_gyro.z} - calibration.gyro;
+    if dt >= PRINT_PERIOD_MS {
+      print!("\x1B[4A");
 
-    gyro.smooth(&(raw_gyro - bias.gyro));
-    acc.smooth(&(raw_acc - bias.acc));
+      state.display_gyro.smooth(&state.imu.last_sample.gyro);
+      state.display_acc.smooth(&state.imu.last_sample.acc);
+      state.display_orientation.pitch += ORIENTATION_ALPHA * (state.imu.orientation.unwrap().pitch - state.display_orientation.pitch);
+      state.display_orientation.roll += ORIENTATION_ALPHA * (state.imu.orientation.unwrap().roll - state.display_orientation.roll);
 
-    println!("\rgyro: {:?}", gyro);
-    println!("\racc: {:?}", acc);
 
-    std::thread::sleep(Duration::from_millis(100));
+      println!("\rgyro: {:?}", state.display_gyro);
+      println!("\racc: {:?}", state.display_acc);
+      println!("\rpitch: {:?}", state.display_orientation.pitch);
+      println!("\rroll: {:?}", state.display_orientation.roll);
+
+      last_time = Instant::now();
+    }
+
+    std::thread::sleep(Duration::from_millis(PRINT_PERIOD_MS as u64));
 
   }
 }
