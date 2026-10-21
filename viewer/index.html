@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fluid · IMU view</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0a0d12;
+      --panel: rgba(18, 23, 31, .86);
+      --line: rgba(170, 190, 215, .12);
+      --muted: #8290a3;
+      --text: #e8eef6;
+      --mint: #79f0c0;
+      --blue: #7aaaff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; overflow: hidden;
+      background: radial-gradient(ellipse at 50% 44%, #17202a 0%, var(--bg) 62%);
+      color: var(--text); font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #scene { position: fixed; inset: 0; }
+    #scene canvas { display: block; width: 100%; height: 100%; }
+    .topbar {
+      position: fixed; z-index: 2; top: 28px; left: 32px; right: 32px;
+      display: flex; justify-content: space-between; align-items: center; pointer-events: none;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; letter-spacing: .12em; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    .mark { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid rgba(121,240,192,.3); border-radius: 9px; color: var(--mint); font-size: 14px; }
+    .connection { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    .led { width: 7px; height: 7px; border-radius: 50%; background: #697585; box-shadow: 0 0 12px transparent; }
+    .connection.live { color: var(--mint); }
+    .connection.live .led { background: var(--mint); box-shadow: 0 0 12px rgba(121,240,192,.8); }
+    .connection.stale { color: #f4bf75; }
+    .connection.stale .led { background: #f4bf75; }
+    .readout {
+      position: fixed; z-index: 2; right: 32px; bottom: 32px; width: min(310px, calc(100vw - 40px));
+      padding: 20px 21px 17px; border: 1px solid var(--line); border-radius: 15px;
+      background: var(--panel); backdrop-filter: blur(18px); box-shadow: 0 18px 65px rgba(0,0,0,.28);
+    }
+    .eyebrow { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
+    .values { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 16px; }
+    .value + .value { padding-left: 18px; border-left: 1px solid var(--line); }
+    .value-label { color: var(--muted); font-size: 11px; }
+    .number { margin-top: 4px; font-size: 28px; font-weight: 550; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+    .number small { margin-left: 4px; color: var(--muted); font-size: 12px; font-weight: 450; letter-spacing: 0; }
+    .foot { display: flex; justify-content: space-between; margin-top: 18px; padding-top: 13px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+    .hint { position: fixed; left: 34px; bottom: 34px; z-index: 2; color: #8996a8; font-size: 11px; }
+    .hint strong { color: #cbd5e2; font-weight: 550; }
+    @media (max-width: 650px) {
+      .topbar { top: 18px; left: 19px; right: 19px; }
+      .readout { right: 18px; bottom: 18px; }
+      .hint { left: 20px; bottom: 26px; max-width: 35vw; line-height: 1.6; }
+    }
+  </style>
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+  </script>
+</head>
+<body>
+  <div id="scene" aria-label="Live 3D MPU orientation"></div>
+  <header class="topbar">
+    <div class="brand"><span class="mark">↗</span><span>Fluid <span style="color:#758297;font-weight:500">/ IMU</span></span></div>
+    <div id="connection" class="connection"><span class="led"></span><span id="connection-text">Waiting for sensor</span></div>
+  </header>
+  <div class="hint"><strong>MPU-6050</strong><br>Move the sensor to see it respond</div>
+  <section class="readout">
+    <div class="eyebrow">Orientation</div>
+    <div class="values">
+      <div class="value"><div class="value-label">Pitch</div><div class="number"><span id="pitch">—</span><small>°</small></div></div>
+      <div class="value"><div class="value-label">Roll</div><div class="number"><span id="roll">—</span><small>°</small></div></div>
+    </div>
+    <div class="foot"><span>Radians streamed · degrees shown</span><span id="updated">--</span></div>
+  </section>
+
+  <script type="module">
+    import * as THREE from 'three';
+
+    const host = document.querySelector('#scene');
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.1, 100);
+    camera.position.set(4.9, 4.1, 5.8);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.25;
+    host.appendChild(renderer.domElement);
+
+    scene.add(new THREE.HemisphereLight(0xc7ddff, 0x18202b, 2.0));
+    const key = new THREE.DirectionalLight(0xffffff, 3.2);
+    key.position.set(-3, 7, 5); scene.add(key);
+    const rim = new THREE.PointLight(0x4c8cff, 22, 12);
+    rim.position.set(3, 2, -4); scene.add(rim);
+
+    const grid = new THREE.GridHelper(16, 32, 0x304052, 0x202b38);
+    grid.position.y = -1.35;
+    grid.material.transparent = true;
+    grid.material.opacity = 0.35;
+    scene.add(grid);
+
+    const rig = new THREE.Group();
+    scene.add(rig);
+    const boardMaterial = new THREE.MeshStandardMaterial({ color: 0x14735e, roughness: .62, metalness: .12 });
+    const darkMaterial = new THREE.MeshStandardMaterial({ color: 0x171e27, roughness: .42, metalness: .28 });
+    const metalMaterial = new THREE.MeshStandardMaterial({ color: 0xc2a66b, roughness: .3, metalness: .75 });
+    const board = new THREE.Mesh(new THREE.BoxGeometry(3.25, .18, 2.15), boardMaterial);
+    rig.add(board);
+
+    // Four plated mounting holes and the MPU package make the board readable at a glance.
+    for (const x of [-1.34, 1.34]) for (const z of [-.79, .79]) {
+      const ring = new THREE.Mesh(new THREE.CylinderGeometry(.105, .105, .035, 24), metalMaterial);
+      ring.position.set(x, .105, z); rig.add(ring);
+      const hole = new THREE.Mesh(new THREE.CylinderGeometry(.052, .052, .04, 20), darkMaterial);
+      hole.position.set(x, .126, z); rig.add(hole);
+    }
+    const chip = new THREE.Mesh(new THREE.BoxGeometry(.78, .24, .68), darkMaterial);
+    chip.position.set(-.15, .205, -.05); rig.add(chip);
+    const chipTop = new THREE.Mesh(new THREE.BoxGeometry(.48, .012, .38), new THREE.MeshStandardMaterial({ color: 0x303b49, metalness: .3, roughness: .35 }));
+    chipTop.position.set(-.15, .333, -.05); rig.add(chipTop);
+
+    for (let i = 0; i < 8; i++) {
+      for (const z of [-.87, .87]) {
+        const pin = new THREE.Mesh(new THREE.BoxGeometry(.12, .5, .12), metalMaterial);
+        pin.position.set(-1.22 + i * .35, -.12, z); rig.add(pin);
+      }
+    }
+
+    const axis = new THREE.AxesHelper(1.2);
+    axis.position.set(-1.05, .18, -.65);
+    rig.add(axis);
+
+    function makeLabel(text) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 512; canvas.height = 128;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#d9f7ea';
+      ctx.font = '700 48px system-ui, sans-serif';
+      ctx.fillText(text, 12, 78);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
+      sprite.scale.set(1.25, .31, 1);
+      return sprite;
+    }
+    const label = makeLabel('MPU 6050');
+    label.position.set(.9, .12, .52); rig.add(label);
+
+    const pitchText = document.querySelector('#pitch');
+    const rollText = document.querySelector('#roll');
+    const connection = document.querySelector('#connection');
+    const connectionText = document.querySelector('#connection-text');
+    const updatedText = document.querySelector('#updated');
+    let targetPitch = 0;
+    let targetRoll = 0;
+    let lastPacketAt = null;
+
+    async function poll() {
+      try {
+        const response = await fetch('/orientation', { cache: 'no-store' });
+        const data = await response.json();
+        if (data.orientation && Number.isFinite(data.orientation.pitch) && Number.isFinite(data.orientation.roll)) {
+          targetPitch = data.orientation.pitch;
+          targetRoll = data.orientation.roll;
+          lastPacketAt = data.lastPacketAt;
+          pitchText.textContent = (THREE.MathUtils.radToDeg(targetPitch)).toFixed(1);
+          rollText.textContent = (THREE.MathUtils.radToDeg(targetRoll)).toFixed(1);
+          updatedText.textContent = 'LIVE';
+        }
+      } catch { /* The viewer remains open while the local receiver starts. */ }
+
+      const age = lastPacketAt == null ? Infinity : Date.now() - lastPacketAt;
+      connection.classList.toggle('live', age < 700);
+      connection.classList.toggle('stale', age >= 700 && age < 3000);
+      connectionText.textContent = age < 700 ? 'Live' : age < 3000 ? 'Signal paused' : 'Waiting for sensor';
+      if (age >= 3000) updatedText.textContent = '--';
+      setTimeout(poll, 80);
+    }
+    poll();
+
+    function animate() {
+      requestAnimationFrame(animate);
+      // The current estimator maps roll to its X gyro axis and pitch to its Y axis.
+      rig.rotation.order = 'YXZ';
+      rig.rotation.x += (targetRoll - rig.rotation.x) * .22;
+      rig.rotation.z += (targetPitch - rig.rotation.z) * .22;
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+  </script>
+</body>
+</html>
