@@ -1,5 +1,6 @@
 use std::ops::Deref;
 
+use crate::sim::CellType::Air;
 use crate::sim::CellType::Solid;
 use crate::sim::CellType::Water;
 use rand::Rng;
@@ -7,7 +8,11 @@ use rand::RngExt;
 
 const GRAVITY: f32 = -9.8; // in m/s^2
 const DT: f32 = 0.03; // DT should change to be actual time per step
-const PARTICLE_RADIUS: f32 = 0.0001; // measured in cell units
+const PARTICLE_RADIUS: f32 = 0.3; // measured in cell units
+const N: i32 = 5;
+const OVERRELAXATION: f32 = 1.9;
+const NUM_PARTICLES: i32 = 3000;
+const BIN_SIZE: f32 = 2.2 * PARTICLE_RADIUS;
 
 #[derive(Debug, Default, Clone, Copy)]
 enum CellType {
@@ -60,10 +65,18 @@ pub fn position_to_grid_cell(x: f32, y: f32, width: usize, height: usize) -> Opt
     Some([x.floor() as usize, y.floor() as usize])
 }
 
+pub struct CellFaceVelocities {
+    pub left_u: f32,
+    pub right_u: f32,
+    pub bottom_v: f32,
+    pub top_v: f32,
+}
+
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Cell {
     cell_type: CellType,
+    s: i32,
     // eventually will need pressure
 
     // 
@@ -83,6 +96,7 @@ pub struct FluidSimulation {
     u: Vec<f32>,
     v: Vec<f32>,
     particles: Vec<Particle>,
+    bins: Vec<Vec<usize>>
 }
 
 impl FluidSimulation {
@@ -93,24 +107,29 @@ impl FluidSimulation {
         let padded_h = pixels_height + 2;
         // add two on each side so we can create boundary cells
         // i will have a 64x32 led matrix, so we technically want a 66 x 34 in software so the other 2 rows and columns can be boundary
-        let mut grid: Vec<Vec<Cell>> = vec![vec![Cell {cell_type: CellType::Air}; padded_w]; padded_h];
+        let mut grid: Vec<Vec<Cell>> = vec![vec![Cell {cell_type: CellType::Air, s: 1}; padded_w]; padded_h];
 
         // dont understand u and v really.
         let mut u = vec![0.0; (padded_h) * (padded_w+1)];
         let mut v = vec![0.0; (padded_h + 1) * (padded_w)];
         let mut particles = vec![Particle::default(); num_particles];
 
+        let bins_across = ((pixels_width as f32 / BIN_SIZE).floor() + 1) as usize;
+        let bins_high = ((pixels_height as f32 / BIN_SIZE).floor() + 1) as usize;
+        
+        let mut bins: Vec<Vec<usize>> = vec![vec![usize; 0]; bins_across * bins_high];
+
         let last_row = grid.len() - 1;
         // create boundary cells
         for j in 0..padded_w {
-            grid[0][j] = Cell { cell_type: Solid };
-            grid[last_row][j] = Cell { cell_type: Solid };
+            grid[0][j] = Cell { cell_type: Solid, s: 0};
+            grid[last_row][j] = Cell { cell_type: Solid, s: 0};
         }
 
         let last_col = grid[0].len() - 1;
         for i in 0..padded_h {
-            grid[i][0] = Cell { cell_type: Solid };
-            grid[i][last_col] = Cell { cell_type: Solid };
+            grid[i][0] = Cell { cell_type: Solid, s: 0 };
+            grid[i][last_col] = Cell { cell_type: Solid, s: 0 };
         }
 
         // initialize the particles
@@ -130,6 +149,7 @@ impl FluidSimulation {
                 .expect("spawned particle must be inside the logical grid");
             // particle coordinates are zero-based logical cells; grid has a solid border at 0.
             grid[row + 1][col + 1].cell_type = Water;
+            grid[row+1][col+1].s = 1;
         }
 
         FluidSimulation {
@@ -141,6 +161,7 @@ impl FluidSimulation {
             u,
             v,
             particles,
+            bins,
         }
     }
 
@@ -240,7 +261,117 @@ impl FluidSimulation {
 
     }
 
-    // fn ensure_incompressibility()
+    fn bin_particles(&mut self) {
+
+        self.bins.iter().map(|p_list| p_list.clear());
+
+        let bins_across = ((self.pixels_width as f32 / BIN_SIZE).floor() + 1) as usize;
+        let bins_height = ((self.pixels_height as f32 / BIN_SIZE).floor() + 1) as usize;
+
+        let adjacent_bins = [
+            [0,0],              // current position   
+            [-1, 0],          // left
+            [1, 0],           // right
+            [0, 1], // above
+            [-1, 1], // above left
+            [1, 1], // above right
+            [0, -1], // bottom
+            [-1, -1], // bottom left
+            [1, -1] // bottom right
+        ];
+
+        for i in 0..self.particles.len() {
+            let particle = self.particles[i];
+
+            let px = particle.pos.x;
+            let py = particle.pos.y;
+
+            let bin_idx = self.get_bin_idx(px, py);
+            self.bins[bin_idx as usize].push(i);
+        }
+
+
+        // actual particle separation
+        // for curr_particle in particles:
+            // bins = get adj bins
+            // for bin in bins
+                // for particle in bin_particles:
+                    // calculate displacement vector for distance and direction
+                    // if distance is less than 2 * particle_radius - overlapping
+                        // move both particles 1/2 * (distance - 2 * particle_radius) along the direction vector
+                            // distance = sqrt((v1-u1)^2 - (v2-u2)^2)
+                            // eg. normalize to unit vector in direction v - u / distance
+                            // multiply unit vector to be opposite direction
+                            // move current particle in opposite direction by 1/2 * (distance - 2 * particle_radius)
+                            // move adjacent particle in displacement direction by 1/2 * (distance - 2 * particle_radius)
+
+        for curr_particle in &mut self.particles {
+            let curr_x = curr_particle.pos.x;
+            let curr_y = curr_particle.pos.y;
+
+            let bins = get_adjacent_bins(curr_x, curr_y)
+        }
+
+    }
+
+    fn ensure_incompressibility(&mut self) {
+        
+        // for n iterations
+            // for each grid cell
+            // if it is water - ensure incompressibility
+                // calculate the 1<o<2 * divergence of the cell
+                // get the s values of the cell (0 for solid, 1 for air/water)
+                // calculate:
+                    // u_i_j = u_i_j + divergence * s_i-1_j/s_total - bottom left
+                    // u_i+1_j = u_i+1_j - divergence * s_i+1_j/s_total - bottom right
+                    // v_i_j = v_i_j + divergence * s_i_j-1/s_total - bottom left
+                    // v_i_j+1 = v_i_j+1 - divergence * s_i_j+1/s_total - top right
+
+                // also need to handle density
+                // he said we calculate the density at the center of each cell, so each cell should also have a density variable
+                // for all particles:
+                    // p1 = p1 * w1, and so on through p4.
+                    // is this just addition of the weights?
+
+        // how do i get cell face velocities - based on a cell's i,j coordinate
+        // need to hold and update a cell's s value and cell status
+
+        for _ in 0..N {
+            for row in 0..self.pixels_height {
+                for col in 0..self.pixels_width {
+                    let grid_row = row + 1;
+                    let grid_col = col + 1;
+
+                    if self.grid[grid_row][grid_col].cell_type == Solid || self.grid[grid_row][grid_col].cell_type == Air {
+                        continue;
+                    }
+                    let cell_velocities = self.cell_face_velocities(col, row)?;
+                    if cell_velocities == None {
+                        panic!("oh no");
+                    }
+                    let divergence = OVERRELAXATION * (cell_velocities.right_u - cell_velocities.left_u + cell_velocities.top_v - cell_velocities.bottom_v);
+                    
+                    let right_s = self.grid[grid_row][grid_col+1].s;
+                    let left_s = self.grid[grid_row][grid_col-1].s;
+                    let top_s = self.grid[grid_row+1][grid_col].s;
+                    let bottom_s = self.grid[grid_row-1][grid_col].s;
+
+                    let total_s = right_s + left_s + top_s + bottom_s;
+
+                    if total_s == 0 {
+                        continue;
+                    }
+
+                    self.u[self.get_u_idx(col as isize, row as isize)] += divergence * (left_s/total_s) as f32;
+                    self.u[self.get_u_idx((col+1) as isize, (row) as isize)] -= divergence * (right_s / total_s) as f32;
+                    self.v[self.get_v_idx(col as isize, row as isize)] += divergence * (bottom_s/total_s) as f32;
+                    self.v[self.get_v_idx((col) as isize, (row+1) as isize)] -= divergence * (top_s/total_s) as f32;
+
+
+                }
+            }
+        }
+    }
 
     fn apply_grid_to_particles(&mut self, old_u: Vec<f32>, old_v: Vec<f32>) {
         
@@ -293,8 +424,8 @@ impl FluidSimulation {
             let pic_u = pic_particle_u_sum / particle_u_weight_sum;
             let pic_v = pic_particle_v_sum / particle_v_weight_sum;
 
-            let flip_u = flip_particle_u_sum / particle_u_weight_sum;
-            let flip_v = flip_particle_v_sum / particle_v_weight_sum;
+            let flip_u = self.particles[i].vel.u + (flip_particle_u_sum / particle_u_weight_sum);
+            let flip_v = self.particles[i].vel.v + (flip_particle_v_sum / particle_v_weight_sum);
 
             self.particles[i].vel.u += 0.1 * pic_u + 0.9 * flip_u;
             self.particles[i].vel.v += 0.1 * pic_v + 0.9 * flip_v;
@@ -364,17 +495,47 @@ impl FluidSimulation {
 
     }
 
-    pub fn get_u_idx(&self, i: isize, j: isize) -> usize {
-        let padded_i = (i + 1) as usize;
-        let padded_j = (j + 1) as usize;
-        padded_j * (self.padded_w + 1) + padded_i
+    pub fn get_u_idx(&self, col: isize, row: isize) -> usize {
+        let paded_col = (col + 1) as usize;
+        let padded_row = (row + 1) as usize;
+        padded_row * (self.padded_w + 1) + paded_col
 
     }
 
-    pub fn get_v_idx(&self, i: isize, j:isize) -> usize {
-        let padded_i = (i + 1) as usize;
-        let padded_j = (j + 1) as usize;
-        padded_j * self.padded_w + padded_i
+    pub fn get_v_idx(&self, col: isize, row:isize) -> usize {
+        let padded_col = (col + 1) as usize;
+        let padded_row = (row + 1) as usize;
+        padded_row * self.padded_w + padded_col
+    }
+
+    pub fn get_bin_idx(&self, p_x: f32, p_y: f32) -> usize {
+
+        let number_of_bins_across = (self.pixels_width as f32 / BIN_SIZE).floor() + 1;
+        let bins_high = (self.pixels_height as f32 / BIN_SIZE).floor() + 1;
+
+        let bin_col = ((p_x / BIN_SIZE).floor()) as usize;
+        let bin_row = ((p_y / BIN_SIZE).floor()) as usize;
+
+        let idx = bin_row * number_of_bins_across + bin_col;
+        idx
+    }
+
+    pub fn get_adjacent_bins(&self, particle_x: f32, particle_y: f32) -> [usize; 8] {
+        let adjacent_bins = [
+            [-1, 0],          // left
+            [1, 0],           // right
+            [0, 1], // above
+            [-1, 1], // above left
+            [1, 1], // above right
+            [0, -1], // bottom
+            [-1, -1], // bottom left
+            [1, -1] // bottom right
+        ];
+
+        let idxs = adjacent_bins.iter().map(|[x_add, y_add]| self.get_bin_idx((particle_x + x_add) as f32, (particle_y + y_add) as f32)).collect();
+
+        return idxs
+        
     }
 
     // return cell face velocities on the staggered grid. vertical components of u and v
